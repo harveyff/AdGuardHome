@@ -2,47 +2,50 @@
 
 ## Docker 镜像自动构建和推送
 
-当你在 GitHub 上创建一个新的 Release 时，`docker-release.yml` workflow 会自动：
+当你在 GitHub 上发布一个**以 "v" 开头的 Release** 时（例如：v1.0.0），`docker-release.yml` workflow 会自动：
 
 1. 构建所有 Linux 平台的二进制文件（386, amd64, arm, arm64, ppc64le）
 2. 构建多架构 Docker 镜像
-3. 推送镜像到 Docker Hub
+3. 推送镜像到 GitHub Container Registry (ghcr.io)
 
-### 配置步骤
+**重要**：
+- ✅ 只有发布以 "v" 开头的 Release 才会触发（如：v1.0.0, v2.1.3）
+- ❌ 提交代码不会触发此 workflow
+- ❌ 不以 "v" 开头的 Release 不会触发（如：1.0.0, release-1.0.0）
 
-#### 1. 在 GitHub 仓库中设置 Secrets
+### 配置说明
 
-在 GitHub 仓库的 Settings → Secrets and variables → Actions 中添加以下 secrets：
+#### 无需额外配置
 
-- **DOCKER_USERNAME**: 你的 Docker Hub 用户名
-- **DOCKER_PASSWORD**: 你的 Docker Hub 密码或访问令牌（Access Token）
+此 workflow 使用 GitHub 内置的 `GITHUB_TOKEN` 自动推送到 GitHub Container Registry，**无需设置任何额外的 secrets**。
 
-#### 2. 获取 Docker Hub Token（推荐使用 Token 而不是密码）
+#### 镜像位置
 
-1. 登录 [Docker Hub](https://hub.docker.com/)
-2. 点击右上角头像 → Account Settings
-3. 选择 Security → New Access Token
-4. 创建具有读写权限的 token
-5. 复制 token 并保存到 GitHub Secrets 中作为 `DOCKER_PASSWORD`
+镜像会自动推送到 GitHub Container Registry，格式为：
+- `ghcr.io/<你的用户名>/adguardhome:<版本号>`
+- `ghcr.io/<你的用户名>/adguardhome:latest`
 
-**注意**：你也可以直接使用 Docker Hub 密码，但使用 Access Token 更安全。
+例如：`ghcr.io/yourusername/adguardhome:v1.0.0` 和 `ghcr.io/yourusername/adguardhome:latest`
 
-#### 3. 修改 Docker 镜像名称（可选）
+#### 查看镜像
 
-如果你想使用不同的 Docker 镜像名称，可以修改 `.github/workflows/docker-release.yml` 文件中的 `DOCKER_IMAGE_NAME` 环境变量。
+1. 在 GitHub 仓库页面，点击右侧的 "Packages"
+2. 或者访问：`https://github.com/users/<你的用户名>/packages/container/adguardhome`
 
-默认格式为：`${{ secrets.DOCKER_USERNAME }}/adguardhome`
+#### 使用镜像
 
-#### 4. 创建 Release
+```bash
+docker pull ghcr.io/<你的用户名>/adguardhome:latest
+```
 
-当你创建一个新的 GitHub Release 时，workflow 会自动触发：
-
-- 镜像标签：`<你的用户名>/adguardhome:<版本号>` 和 `<你的用户名>/adguardhome:latest`
-- 例如：`yourusername/adguardhome:v1.0.0` 和 `yourusername/adguardhome:latest`
+**注意**：如果镜像设置为私有，需要先登录：
+```bash
+echo $GITHUB_TOKEN | docker login ghcr.io -u <你的用户名> --password-stdin
+```
 
 ### 注意事项
 
-- 确保 Docker Hub 仓库名称与 `DOCKER_IMAGE_NAME` 中设置的一致
-- 首次推送前，建议在 Docker Hub 上手动创建对应的仓库
+- 镜像默认是私有的，可以在 GitHub Packages 页面修改为公开
 - workflow 会构建多架构镜像（linux/386, linux/amd64, linux/arm/v6, linux/arm/v7, linux/arm64, linux/ppc64le）
+- 确保 workflow 有 `packages: write` 权限（已在 workflow 中配置）
 
