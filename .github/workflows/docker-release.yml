@@ -74,7 +74,8 @@ jobs:
           VERBOSE: '1'
           FRONTEND_PREBUILT: '1'
         run: |
-          make build-release
+          echo "Building with CHANNEL=release, VERSION=${{ github.event.release.tag_name || github.event.inputs.tag_name }}"
+          make CHANNEL=release VERSION="${{ github.event.release.tag_name || github.event.inputs.tag_name }}" build-release
 
       - name: Verify binaries were built
         run: |
