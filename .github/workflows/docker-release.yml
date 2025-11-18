@@ -1,0 +1,84 @@
+name: Build and Push Docker Image on Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  DOCKER_IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/adguardhome
+  DIST_DIR: dist
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd client && npm ci
+
+      - name: Build frontend
+        run: |
+          cd client && npm run build-prod
+
+      - name: Install Go dependencies
+        run: |
+          make go-deps
+
+      - name: Build release binaries for Docker
+        env:
+          CHANNEL: release
+          VERSION: ${{ github.event.release.tag_name }}
+          REVISION: ${{ github.sha }}
+          ARCH: '386 amd64 arm arm64 ppc64le'
+          OS: linux
+          SIGN: '0'
+          VERBOSE: '1'
+          FRONTEND_PREBUILT: '1'
+        run: |
+          make build-release
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        env:
+          CHANNEL: release
+          VERSION: ${{ github.event.release.tag_name }}
+          REVISION: ${{ github.sha }}
+          DIST_DIR: dist
+          DOCKER_IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/adguardhome
+          DOCKER_OUTPUT: type=image,name=${{ secrets.DOCKER_USERNAME }}/adguardhome,push=true
+          VERBOSE: '1'
+        run: |
+          sh ./scripts/make/build-docker.sh
+
