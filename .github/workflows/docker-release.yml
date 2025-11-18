@@ -3,6 +3,12 @@ name: Build and Push Docker Image on Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (for testing)'
+        required: false
+        default: 'v1.0.0'
 
 env:
   DOCKER_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/adguardhome
@@ -11,12 +17,23 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: startsWith(github.event.release.tag_name, 'v')
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     permissions:
       contents: read
       packages: write
 
     steps:
+      - name: Debug - Check workflow trigger
+        run: |
+          echo "Workflow triggered!"
+          echo "Event name: ${{ github.event_name }}"
+          echo "Release tag: ${{ github.event.release.tag_name }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Tag starts with 'v': ${{ startsWith(github.event.release.tag_name, 'v') }}"
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -49,7 +66,7 @@ jobs:
       - name: Build release binaries for Docker
         env:
           CHANNEL: release
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
           REVISION: ${{ github.sha }}
           ARCH: '386 amd64 arm arm64 ppc64le'
           OS: linux
@@ -58,6 +75,38 @@ jobs:
           FRONTEND_PREBUILT: '1'
         run: |
           make build-release
+
+      - name: Verify binaries were built
+        run: |
+          echo "Checking if binaries exist..."
+          ls -la dist/ || echo "dist directory not found"
+          echo "Looking for AdGuardHome binaries..."
+          find dist -name "AdGuardHome" -type f || echo "No AdGuardHome binaries found"
+          echo ""
+          echo "Checking required binary paths:"
+          for arch in 386 amd64 arm64; do
+            path="dist/AdGuardHome_linux_${arch}/AdGuardHome/AdGuardHome"
+            if [ -f "$path" ]; then
+              echo "✓ Found: $path"
+            else
+              echo "✗ Missing: $path"
+            fi
+          done
+          for arm in 6 7; do
+            path="dist/AdGuardHome_linux_arm_${arm}/AdGuardHome/AdGuardHome"
+            if [ -f "$path" ]; then
+              echo "✓ Found: $path"
+            else
+              echo "✗ Missing: $path"
+            fi
+          done
+          path="dist/AdGuardHome_linux_ppc64le/AdGuardHome/AdGuardHome"
+          if [ -f "$path" ]; then
+            echo "✓ Found: $path"
+          else
+            echo "✗ Missing: $path"
+          fi
+          echo "Binary check complete"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -75,12 +124,18 @@ jobs:
       - name: Build and push Docker image
         env:
           CHANNEL: release
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
           REVISION: ${{ github.sha }}
           DIST_DIR: dist
           DOCKER_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/adguardhome
           DOCKER_OUTPUT: type=image,name=ghcr.io/${{ github.repository_owner }}/adguardhome,push=true
           VERBOSE: '1'
         run: |
-          sh ./scripts/make/build-docker.sh
+          echo "Building Docker image..."
+          echo "DOCKER_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/adguardhome"
+          echo "VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}"
+          echo "Checking dist directory before build..."
+          ls -la dist/docker/ || echo "dist/docker not found, will be created"
+          sh -x ./scripts/make/build-docker.sh
+          echo "Docker build completed"
 
