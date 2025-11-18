@@ -31,7 +31,7 @@ test.describe('DNS Settings', () => {
     };
 
     test('test for Default DNS', async ({ page }) => {
-        await runDNSSettingsTest(page, 'https://dns10.quad9.net/dns-query');
+        await runDNSSettingsTest(page, 'udp://10.233.0.3:53');
     });
 
     test('test for Plain DNS', async ({ page }) => {
