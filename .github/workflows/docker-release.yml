@@ -129,7 +129,7 @@ jobs:
           REVISION: ${{ github.sha }}
           DIST_DIR: dist
           DOCKER_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/adguardhome
-          DOCKER_OUTPUT: type=image,name=ghcr.io/${{ github.repository_owner }}/adguardhome,push=true
+          DOCKER_PUSH: '1'
           VERBOSE: '1'
         run: |
           echo "Building Docker image..."
