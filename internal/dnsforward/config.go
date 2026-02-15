@@ -122,6 +122,13 @@ type Config struct {
 	// CacheOptimistic defines if optimistic cache mechanism should be used.
 	CacheOptimistic bool `yaml:"cache_optimistic"`
 
+	// CacheOptimisticAnswerTTL is the default TTL for expired cached responses.
+	CacheOptimisticAnswerTTL timeutil.Duration `yaml:"cache_optimistic_answer_ttl"`
+
+	// CacheOptimisticMaxAge is the maximum time entries remain in the cache
+	// when cache is optimistic.
+	CacheOptimisticMaxAge timeutil.Duration `yaml:"cache_optimistic_max_age"`
+
 	// Other settings
 
 	// BogusNXDomain is the list of IP addresses, responses with them will be
@@ -330,6 +337,8 @@ func (s *Server) newProxyConfig(ctx context.Context) (conf *proxy.Config, err er
 		CacheMinTTL:               srvConf.CacheMinTTL,
 		CacheMaxTTL:               srvConf.CacheMaxTTL,
 		CacheOptimistic:           srvConf.CacheOptimistic,
+		CacheOptimisticAnswerTTL:  time.Duration(srvConf.CacheOptimisticAnswerTTL),
+		CacheOptimisticMaxAge:     time.Duration(srvConf.CacheOptimisticMaxAge),
 		UpstreamConfig:            srvConf.UpstreamConfig,
 		PrivateRDNSUpstreamConfig: srvConf.PrivateRDNSUpstreamConfig,
 		BeforeRequestHandler:      s,
@@ -490,6 +499,7 @@ func (conf *ServerConfig) loadUpstreams(
 	}
 
 	var data []byte
+	// #nosec G703 -- Trust the path explicitly given by the user.
 	data, err = os.ReadFile(conf.UpstreamDNSFileName)
 	if err != nil {
 		return nil, fmt.Errorf("reading upstream from file: %w", err)
