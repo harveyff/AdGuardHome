@@ -63,10 +63,29 @@ jobs:
         run: |
           make go-deps
 
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ github.event.inputs.tag_name }}" ] && [ "${{ github.event.inputs.tag_name }}" != "v1.0.0" ]; then
+            VERSION="${{ github.event.inputs.tag_name }}"
+          else
+            # Try to get the latest tag from git
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -z "$VERSION" ]; then
+              echo "ERROR: Could not determine version. Please provide tag_name input when using workflow_dispatch."
+              exit 1
+            fi
+            echo "Using latest git tag: $VERSION"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Determined version: $VERSION"
+
       - name: Build release binaries for Docker
         env:
           CHANNEL: release
-          VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
           REVISION: ${{ github.sha }}
           ARCH: '386 amd64 arm arm64 ppc64le'
           OS: linux
@@ -74,8 +93,8 @@ jobs:
           VERBOSE: '1'
           FRONTEND_PREBUILT: '1'
         run: |
-          echo "Building with CHANNEL=release, VERSION=${{ github.event.release.tag_name || github.event.inputs.tag_name }}, SIGN=0"
-          make CHANNEL=release VERSION="${{ github.event.release.tag_name || github.event.inputs.tag_name }}" SIGN=0 build-release
+          echo "Building with CHANNEL=release, VERSION=${{ steps.version.outputs.version }}, SIGN=0"
+          make CHANNEL=release VERSION="${{ steps.version.outputs.version }}" SIGN=0 build-release
 
       - name: Verify binaries were built
         run: |
@@ -125,18 +144,78 @@ jobs:
       - name: Build and push Docker image
         env:
           CHANNEL: release
-          VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
           REVISION: ${{ github.sha }}
           DIST_DIR: dist
           DOCKER_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/adguardhome
           DOCKER_PUSH: '1'
           VERBOSE: '1'
         run: |
-          echo "Building Docker image..."
+          echo "=========================================="
+          echo "Building and Pushing Docker Image"
+          echo "=========================================="
           echo "DOCKER_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/adguardhome"
-          echo "VERSION: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}"
+          echo "VERSION: ${{ steps.version.outputs.version }}"
+          echo "DOCKER_PUSH: 1"
+          echo "REVISION: ${{ github.sha }}"
+          echo "=========================================="
+          echo ""
           echo "Checking dist directory before build..."
           ls -la dist/docker/ || echo "dist/docker not found, will be created"
-          sh -x ./scripts/make/build-docker.sh
-          echo "Docker build completed"
+          echo ""
+          echo "Starting Docker build and push..."
+          if sh -x ./scripts/make/build-docker.sh; then
+            echo ""
+            echo "✓ Docker build and push completed successfully!"
+          else
+            echo ""
+            echo "✗ ERROR: Docker build or push failed!"
+            exit 1
+          fi
+          
+      - name: Verify image was pushed
+        run: |
+          IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/adguardhome"
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "=========================================="
+          echo "Image Push Verification"
+          echo "=========================================="
+          echo "Expected image name: ${IMAGE_NAME}"
+          echo "Version tag: ${VERSION}"
+          echo "Latest tag: latest"
+          echo ""
+          echo "Note: Images pushed to GitHub Container Registry are PRIVATE by default."
+          echo "To make them public:"
+          echo "1. Go to: https://github.com/${{ github.repository_owner }}?tab=packages"
+          echo "2. Find the 'adguardhome' package"
+          echo "3. Click on it and go to 'Package settings'"
+          echo "4. Scroll down and click 'Change visibility' -> 'Make public'"
+          echo "=========================================="
+          
+          # Re-login to verify we can access the registry
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+          # Try to inspect the pushed images
+          echo "Attempting to verify images..."
+          if docker buildx imagetools inspect ${IMAGE_NAME}:${VERSION} 2>/dev/null; then
+            echo "✓ Successfully verified ${IMAGE_NAME}:${VERSION}"
+          else
+            echo "✗ WARNING: Could not verify ${IMAGE_NAME}:${VERSION}"
+            echo "  This might mean:"
+            echo "  - The image was not pushed successfully"
+            echo "  - The image is private and requires authentication"
+            echo "  - There was a network issue"
+          fi
+          
+          if docker buildx imagetools inspect ${IMAGE_NAME}:latest 2>/dev/null; then
+            echo "✓ Successfully verified ${IMAGE_NAME}:latest"
+          else
+            echo "✗ WARNING: Could not verify ${IMAGE_NAME}:latest"
+          fi
+          
+          echo ""
+          echo "To view your packages, visit:"
+          echo "https://github.com/${{ github.repository_owner }}?tab=packages"
+          echo "or"
+          echo "https://github.com/users/${{ github.repository_owner }}/packages/container/adguardhome"
 
