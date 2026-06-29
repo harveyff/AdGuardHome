@@ -20,6 +20,7 @@ import (
 	"github.com/AdguardTeam/AdGuardHome/internal/dhcpd"
 	"github.com/AdguardTeam/AdGuardHome/internal/dnsforward"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
+	"github.com/AdguardTeam/AdGuardHome/internal/filtering/rulelist"
 	"github.com/AdguardTeam/AdGuardHome/internal/querylog"
 	"github.com/AdguardTeam/AdGuardHome/internal/schedule"
 	"github.com/AdguardTeam/AdGuardHome/internal/stats"
@@ -181,8 +182,11 @@ type configuration struct {
 // Field ordering is important, YAML fields better not to be reordered, if it's
 // not absolutely necessary.
 type httpConfig struct {
-	// Pprof defines the profiling HTTP handler.
+	// Pprof defines the profiling HTTP handler.  It is never nil.
 	Pprof *httpPprofConfig `yaml:"pprof"`
+
+	// DoH contains DNS-over-HTTPS configuration.  It is never nil.
+	DoH *doHConfig `yaml:"doh"`
 
 	// Address is the address to serve the web UI on.
 	Address netip.AddrPort
@@ -199,6 +203,20 @@ type httpPprofConfig struct {
 
 	// Enabled defines if the profiling handler is enabled.
 	Enabled bool `yaml:"enabled"`
+}
+
+// doHConfig is the block with DNS-over-HTTPS configuration.
+type doHConfig struct {
+	// Routes is the list of HTTP route patterns for DoH requests.  Default
+	// routes are:
+	//   - "GET /dns-query"
+	//   - "POST /dns-query"
+	//   - "GET /dns-query/{ClientID}"
+	//   - "POST /dns-query/{ClientID}"
+	Routes []string `yaml:"routes"`
+
+	// InsecureEnabled allows DoH queries via unencrypted HTTP.
+	InsecureEnabled bool `yaml:"insecure_enabled"`
 }
 
 // dnsConfig is a block with DNS configuration params.
@@ -283,6 +301,9 @@ type pendingRequests struct {
 // and HTTPS.  When adding new properties, update the [tlsConfigSettings.clone]
 // and [tlsConfigSettings.setPrivateFieldsAndCompare] methods as necessary.
 type tlsConfigSettings struct {
+	// Status is the current status of the configuration.
+	Status tlsConfigStatus `yaml:"-" json:"-"`
+
 	// Enabled indicates whether encryption (DoT/DoH/HTTPS) is enabled.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
@@ -309,14 +330,8 @@ type tlsConfigSettings struct {
 	// if PortDNSCrypt is not zero.
 	//
 	// See https://github.com/AdguardTeam/dnsproxy and
-	// https://github.com/ameshkov/dnscrypt.
+	// https://github.com/AdguardTeam/dnscrypt.
 	DNSCryptConfigFile string `yaml:"dnscrypt_config_file" json:"dnscrypt_config_file"`
-
-	// AllowUnencryptedDoH allows DoH queries via unencrypted HTTP (e.g. for
-	// reverse proxying).
-	//
-	// TODO(s.chzhen):  Add this option into the Web UI.
-	AllowUnencryptedDoH bool `yaml:"allow_unencrypted_doh" json:"allow_unencrypted_doh"`
 
 	// CertificateChain is the PEM-encoded certificate chain.  Must be empty if
 	// [tlsConfigSettings.CertificatePath] is provided.
@@ -348,6 +363,9 @@ type tlsConfigSettings struct {
 	// StrictSNICheck controls if the connections with SNI mismatching the
 	// certificate's ones should be rejected.
 	StrictSNICheck bool `yaml:"strict_sni_check" json:"-"`
+
+	// ServePlainDNS defines whether to serve a plain DNS.
+	ServePlainDNS bool `yaml:"-" json:"-"`
 }
 
 // clone returns a deep copy of c.
@@ -359,16 +377,16 @@ func (c *tlsConfigSettings) clone() (clone *tlsConfigSettings) {
 	clone.CertificateChainData = slices.Clone(c.CertificateChainData)
 	clone.PrivateKeyData = slices.Clone(c.PrivateKeyData)
 
+	clone.Status.DNSNames = slices.Clone(c.Status.DNSNames)
+
 	return clone
 }
 
 // setPrivateFieldsAndCompare sets any missing properties in conf to match those
-// in c and returns true if TLS configurations are equal.  conf must not be be
-// nil.
+// in c and returns true if TLS configurations are equal.  conf must not be nil.
 // It sets the following properties because these are not accepted from the
 // frontend:
 //
-//	[tlsConfigSettings.AllowUnencryptedDoH]
 //	[tlsConfigSettings.DNSCryptConfigFile]
 //	[tlsConfigSettings.OverrideTLSCiphers]
 //	[tlsConfigSettings.PortDNSCrypt]
@@ -380,9 +398,6 @@ func (c *tlsConfigSettings) clone() (clone *tlsConfigSettings) {
 //	[tlsConfigSettings.PrivateKeyData]
 func (c *tlsConfigSettings) setPrivateFieldsAndCompare(conf *tlsConfigSettings) (equal bool) {
 	conf.OverrideTLSCiphers = slices.Clone(c.OverrideTLSCiphers)
-
-	// TODO(s.chzhen):  Remove this once the frontend supports it.
-	conf.AllowUnencryptedDoH = c.AllowUnencryptedDoH
 
 	conf.DNSCryptConfigFile = c.DNSCryptConfigFile
 	conf.PortDNSCrypt = c.PortDNSCrypt
@@ -456,6 +471,15 @@ var config = &configuration{
 			Enabled: false,
 			Port:    6060,
 		},
+		DoH: &doHConfig{
+			Routes: []string{
+				"GET /dns-query",
+				"POST /dns-query",
+				"GET /dns-query/{ClientID}",
+				"POST /dns-query/{ClientID}",
+			},
+			InsecureEnabled: false,
+		},
 	},
 	DNS: dnsConfig{
 		BindHosts: []netip.Addr{netip.IPv4Unspecified()},
@@ -478,6 +502,7 @@ var config = &configuration{
 			CacheSize:                4 * 1024 * 1024,
 			CacheOptimisticAnswerTTL: timeutil.Duration(30 * time.Second),
 			CacheOptimisticMaxAge:    timeutil.Duration(12 * time.Hour),
+			EnableDNSSEC:             true,
 
 			EDNSClientSubnet: &dnsforward.EDNSClientSubnet{
 				CustomIP:  netip.Addr{},
@@ -547,6 +572,7 @@ var config = &configuration{
 		ParentalEnabled:     false,
 		SafeBrowsingEnabled: false,
 
+		MaxHTTPSize:           rulelist.DefaultMaxRuleListSize,
 		SafeBrowsingCacheSize: 1 * 1024 * 1024,
 		SafeSearchCacheSize:   1 * 1024 * 1024,
 		ParentalCacheSize:     1 * 1024 * 1024,
@@ -867,8 +893,8 @@ func (c *configuration) write(
 	}
 
 	if tlsMgr != nil {
-		tlsConf := tlsMgr.config()
-		config.TLS = *tlsConf
+		extTLSConf := tlsMgr.extendedTLSConfig()
+		config.TLS = *extTLSConf
 	}
 
 	if globalContext.stats != nil {

@@ -2,9 +2,21 @@
 
 <!-- TODO(a.garipov): Reformat in accordance with the KeepAChangelog spec. -->
 
+## v0.107.78: API changes
+
+### New `interval` values in `GET /control/filtering/status` and `POST /control/filtering/config` APIs
+
+The property `interval` of the objects returned from and accepted by the aforementioned APIs can now be any integer between 0 and 8760 (365 days).
+
+## v0.107.77: API changes
+
+### New `reason` query parameter in 'GET /control/querylog'
+
+- New query parameter `reason` allows filtering query log entries by reason.  The `response_status` parameter is now deprecated.
+
 ## v0.107.72: API changes
 
-## New `recent` query parameter in 'GET /control/stats/'
+### New `recent` query parameter in 'GET /control/stats/'
 
 - New query parameter `recent` defines the statistics lookback period in millieseconds.
 

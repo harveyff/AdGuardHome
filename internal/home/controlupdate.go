@@ -77,7 +77,7 @@ func (web *webAPI) handleVersionJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 // requestVersionInfo sets the VersionInfo field of resp if it can reach the
-// update server.
+// update server.  resp must not be nil.
 func (web *webAPI) requestVersionInfo(
 	ctx context.Context,
 	resp *versionResponse,
@@ -90,8 +90,7 @@ func (web *webAPI) requestVersionInfo(
 			return nil
 		}
 
-		var terr temporaryError
-		if errors.As(err, &terr) && terr.Temporary() {
+		if tmpErr, ok := errors.AsType[temporaryError](err); ok && tmpErr.Temporary() {
 			// Temporary network error.  This case may happen while we're
 			// restarting our DNS server.  Log and sleep for some time.
 			//
@@ -110,6 +109,8 @@ func (web *webAPI) requestVersionInfo(
 	}
 
 	if err != nil {
+		web.logger.WarnContext(ctx, "getting version info", slogutil.KeyError, err)
+
 		return fmt.Errorf("getting version info: %w", err)
 	}
 
@@ -129,7 +130,7 @@ func (web *webAPI) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			r,
 			w,
 			http.StatusBadRequest,
-			"/update request isn't allowed now",
+			"update request isn't allowed now",
 		)
 
 		return
@@ -179,6 +180,10 @@ type versionResponse struct {
 	Disabled bool `json:"disabled"`
 }
 
+// maxPrivilegedPort is the maximum port number.  This only applies to Unix, as
+// on Windows, [aghnet.CanBindPrivilegedPorts] always returns `true`, `nil`.
+const maxPrivilegedPort = 1024
+
 // setAllowedToAutoUpdate sets CanAutoUpdate to true if AdGuard Home is actually
 // allowed to perform an automatic update by the OS.  l and tlsMgr must not be
 // nil.
@@ -192,9 +197,9 @@ func (vr *versionResponse) setAllowedToAutoUpdate(
 	}
 
 	canUpdate := true
-	if tlsConfUsesPrivilegedPorts(tlsMgr.config()) ||
-		config.HTTPConfig.Address.Port() < 1024 ||
-		config.DNS.Port < 1024 {
+	if tlsConfUsesPrivilegedPorts(tlsMgr.extendedTLSConfig()) ||
+		config.HTTPConfig.Address.Port() < maxPrivilegedPort ||
+		config.DNS.Port < maxPrivilegedPort {
 		canUpdate, err = aghnet.CanBindPrivilegedPorts(ctx, l)
 		if err != nil {
 			return fmt.Errorf("checking ability to bind privileged ports: %w", err)
@@ -207,9 +212,11 @@ func (vr *versionResponse) setAllowedToAutoUpdate(
 }
 
 // tlsConfUsesPrivilegedPorts returns true if the provided TLS configuration
-// indicates that privileged ports are used.
+// indicates that privileged ports are used.  c must be valid
 func tlsConfUsesPrivilegedPorts(c *tlsConfigSettings) (ok bool) {
-	return c.Enabled && (c.PortHTTPS < 1024 || c.PortDNSOverTLS < 1024 || c.PortDNSOverQUIC < 1024)
+	return c.Enabled && (c.PortHTTPS < maxPrivilegedPort ||
+		c.PortDNSOverTLS < maxPrivilegedPort ||
+		c.PortDNSOverQUIC < maxPrivilegedPort)
 }
 
 // finishUpdate completes an update procedure.  It is intended to be used as a
